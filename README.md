@@ -1,6 +1,6 @@
 ## Purpose
 
-This code is designed to facilitate the selection of optimal SNOMED concepts for the prediction of class labels by leveraging techniques such as graph analysis and statistics to identify concepts that best fit specified criteria, such the difference in class prevelance at a given node.
+This code is designed to facilitate the selection of optimal SNOMED concepts for the prediction of class labels. Selection is performed by leveraging techniques such as graph analysis and statistics to identify concepts that best fit a specified criteria, such the difference in class prevelance at a given node.
 
 ## Usage
 
