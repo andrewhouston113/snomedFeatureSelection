@@ -25,3 +25,6 @@ selected_concepts = concept_selector.select_concepts(min_diff=0.1, n_concepts=10
 # Print selected concepts
 for concept in selected_concepts:
     print(concept)
+```
+### Contribution
+This repository is a translation of the [Graph Patterns Package](https://github.com/kaicode/graph-patterns/) into Python.
