@@ -1,6 +1,6 @@
 ## Purpose
 
-This code is designed to facilitate the selection of optimal SNOMED concepts for the prediction of class labels by leveraging techniques such as graph analysis and statistics to identify concepts that best fit specified criteria, such the difference in class prevelance at a given node.
+This code is designed to facilitate the selection of optimal SNOMED concepts for the prediction of class labels. Selection is performed by leveraging techniques such as graph analysis and statistics to identify concepts that best fit a specified criteria, such the difference in class prevelance at a given node.
 
 ## Usage
 
@@ -25,3 +25,6 @@ selected_concepts = concept_selector.select_concepts(min_diff=0.1, n_concepts=10
 # Print selected concepts
 for concept in selected_concepts:
     print(concept)
+```
+### Contribution
+This repository is a translation of the [Graph Patterns Package](https://github.com/kaicode/graph-patterns/) into Python.
