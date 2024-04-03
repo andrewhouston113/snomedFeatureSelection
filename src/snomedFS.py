@@ -14,51 +14,51 @@ class determine_best_concepts:
             instance_data_path (str): Path to the file containing instance data.
             groups_path (str): Path to the file containing groups data.
         """
-        # Read Data
-        self.child_parents_df = pd.read_csv(child_parents_path)
-        self.instance_data_df = pd.read_csv(instance_data_path)
-        self.instance_groups_df = pd.read_csv(groups_path)
-
-        # Get Group Labels
-        self.group_instance_map = {}
-        for _, row in self.instance_groups_df.iterrows():
-            self.group_instance_map.setdefault(row['label'], set()).add(row["id"])
-        
-        self.groups = list(self.group_instance_map.keys())
-        self.group_size = {group:len(self.group_instance_map[group]) for group in self.groups}
 
         # Create SNOMED-CT Graph
-        kg_directed = self._create_snomed_graph(self.child_parents_df, graph_type='directed')
-        kg_undirected = kg_directed.to_undirected()
+        self.snomed_ct_graph = self._create_snomed_graph(child_parents_path)
 
         # Assign Instances to Nodes
-        node_attributes = {}
-        for _, row in self.instance_data_df.iterrows():
-            node_attributes.setdefault(row["code"], set()).add(row["id"])
+        instance_data = self._read_instance_data(instance_data_path)
+        for node in self.snomed_ct_graph.nodes:
+            if node not in instance_data:
+                instance_data[node] = set()
 
-        for node in kg_directed.nodes:
-            if node not in node_attributes:
-                node_attributes[node] = []
+        concept_depth_dict = nx.shortest_path_length(self.snomed_ct_graph,'138875005')
+        sorted_shortest_paths = dict(sorted(concept_depth_dict.items(), key=lambda item: item[1], reverse=True))
 
-        nx.set_node_attributes(kg_directed, node_attributes, 'cohort')
+        # Calculating Relative Depth
+        self.relative_depth_dict = {}
+        for node in tqdm(self.snomed_ct_graph.nodes(), desc="Calculating Relative Depth"):
+            descendants = len(nx.descendants(self.snomed_ct_graph, node))
+            ancestors = len(nx.ancestors(self.snomed_ct_graph, node))
+            self.relative_depth_dict[node] = ancestors/(descendants+ancestors)
 
         # Subsume Concepts
-        for node in tqdm(node_attributes, desc="Subsuming Concepts"):
-            descendents = nx.descendants(kg_directed, node)
-            children_lists = [node_attributes[descendant] for descendant in descendents if descendant in node_attributes]
-            node_attributes[node] = list(set().union(*children_lists, node_attributes[node]))
+        for node in tqdm(sorted_shortest_paths, desc="Subsuming Concepts"):
+            if node in self.snomed_ct_graph:
+                descendents = nx.descendants(self.snomed_ct_graph, node)
+                children_lists = [instance_data[descendant] for descendant in descendents if descendant in instance_data]
+                child_instances = set().union(*children_lists)
+                instance_data[node] = instance_data[node].union(child_instances)
 
+        # Load Groups
+        self.group_instance_map = self._read_group_data(groups_path)
+        self.groups = list(self.group_instance_map.keys())
+        self.group_size = {group:len(self.group_instance_map[group]) for group in self.groups}
+        
         # Assigning Node Contents to Groups
         self.grouped_node_attributes = {}
-        for node in tqdm(node_attributes, desc="Assigning Node Contents to Groups"):
-            self.grouped_node_attributes[node] = {group: [id for id in node_attributes[node] if id in self.group_instance_map[group]] for group in self.groups}
+        for node in tqdm(instance_data, desc="Assigning Node Contents to Groups"):
+            if node in self.snomed_ct_graph:
+                self.grouped_node_attributes[node] = {group: [id for id in instance_data[node] if id in self.group_instance_map[group]] for group in self.groups}
         
-        # Calculate Difference Score and Depths for Each Node
-        for node in tqdm(self.grouped_node_attributes, desc="Calculating Depth and Differences"):
+        # Calculate Difference Score
+        for node in tqdm(self.grouped_node_attributes, desc="Calculating Differences"):
+            self.grouped_node_attributes[node]['precision'] = self._average_precision(node)
             self.grouped_node_attributes[node]['difference'] = self._calculate_difference(node)
-            self.grouped_node_attributes[node]['depth'] = self._get_concept_distance(kg_undirected, node, 138875005)
 
-    def select_concepts(self, min_diff, n_concepts):
+    def select_concepts(self, min_diff, min_depth, n_concepts, metric):
         """
         Select concepts based on minimum difference and number of concepts required.
 
@@ -70,99 +70,58 @@ class determine_best_concepts:
             list: A list of selected concept nodes.
         """
         # Sort nodes according to their difference, breaking ties with the deeper concept
-        sorted_node_attributes = dict(sorted(self.grouped_node_attributes.items(), key=self._custom_sort_key))
+        sorted_node_attributes = dict(sorted(self.grouped_node_attributes.items(), key=lambda item: item[1][metric], reverse=True))
 
         # For each node, append the "best node" to the list, until the min_diff is not met or n_concepts is reached or there are no more features
         best_nodes = []
+        lineage = []
         for node in sorted_node_attributes:
-            if self.grouped_node_attributes[node]['difference'] < min_diff or len(best_nodes) >= n_concepts or len(best_nodes) == len(self.grouped_node_attributes):
+            if self.grouped_node_attributes[node][metric] < min_diff or len(best_nodes) >= n_concepts or len(best_nodes) == len(self.grouped_node_attributes):
                 break
-            best_nodes.append(node)
+
+            if (node in lineage) | (self.relative_depth_dict[node] < min_depth):
+                pass
+            else:
+                best_nodes.append(node)
+                lineage += nx.descendants(self.snomed_ct_graph,node)
+                lineage += nx.ancestors(self.snomed_ct_graph,node)
+    
         return best_nodes
 
-    def _create_snomed_graph(self, relationships_df, graph_type='both'):
-        """
-        Create SNOMED CT graphs based on provided relationships.
+    def _create_snomed_graph(self, child_parents_path):
+        knowledge_graph = nx.DiGraph()
+        with open(child_parents_path, 'r') as file:
+            # Skipping the header line
+            next(file)
 
-        Parameters:
-            relationships_df (pd.DataFrame): DataFrame containing SNOMED CT relationships.
-                It should have 'sourceId' and 'destinationId' columns for edges.
-            
-            graph_type (str, optional): The type of graph to create.
-                Possible values:
-                    - 'directed': Create a directed graph.
-                    - 'undirected': Create an undirected graph.
-                    - 'both' (default): Create both directed and undirected graphs.
+            for line in file:
+                child, parent = line.strip().split(",")
+                knowledge_graph.add_edge(parent, child)
+        return knowledge_graph
+    
+    def _read_instance_data(self, instance_data_path):
+        instance_graphs = {}
+        with open(instance_data_path, 'r') as file:
+            # Skipping the header line
+            file.readline()
 
-        Returns:
-            nx.Graph or nx.DiGraph: A NetworkX graph object based on the specified graph_type.
-        
-        Raises:
-            ValueError: If the 'graph_type' argument is not one of the allowed values.
-            ValueError: If the 'relationships_df' is not a DataFrame or missing required columns.
-        """
-        
-        # Check if 'graph_type' is valid
-        if graph_type not in ['directed', 'undirected', 'both']:
-            raise ValueError("Invalid 'graph_type'. Allowed values are 'directed', 'undirected', or 'both'.")
-        
-        # Validate the input DataFrame
-        if not isinstance(relationships_df, pd.DataFrame):
-            raise ValueError("Input 'relationships_df' is not a DataFrame.")
-            
-        required_columns = ['sourceId', 'destinationId']
-        missing_columns = [col for col in required_columns if col not in relationships_df.columns]
-        if missing_columns:
-            raise ValueError(f"'relationships_df' must include the following columns: {', '.join(required_columns)}")
+            for line in file:
+                cols = line.strip().split(",")
+                if len(cols) == 3:  # Ensure all columns are present
+                    instance_id, _, code = cols
+                    instance_graphs.setdefault(code, set()).add(instance_id)
 
-        # Create a directed graph
-        G = nx.DiGraph()
+        return instance_graphs
+    
+    def _read_group_data(self, cohort_path):
+        with open(cohort_path, 'r') as file:
+            next(file)
+            cohort_instance_map = {}
+            for line in file:
+                instance_id, cohort = line.strip().split(",")
+                cohort_instance_map.setdefault(cohort, set()).add(instance_id)
 
-        # Add nodes and edges from the provided DataFrame
-        for _, row in tqdm(relationships_df.iterrows(), total=len(relationships_df), desc="Building Graph"):
-            G.add_edge(row['destinationId'], row['sourceId'])
-
-        if graph_type == 'directed':
-            return G
-        elif graph_type == 'undirected':
-            return G.to_undirected()
-        else:  # Default: 'both'
-            snomed_graphs = {
-                'directed': G,
-                'undirected': G.to_undirected()
-            }
-            return snomed_graphs
-
-    def _get_concept_distance(self, G, source_id, target_id):
-        """
-        Calculate the shortest path length between two nodes in an undirected graph, considering edge weights if specified.
-
-        Parameters:
-            G (networkx.Graph): The undirected graph in which to calculate the distance.
-            source_id (int): The source node.
-            target_id (int): The target node.
-            weighted (bool or None, optional): Whether to consider the edge weights in the distance calculation.
-                If None, it will default to True if the graph has edge weights, or False if it doesn't.
-
-        Returns:
-            int: The shortest path length between the source and target nodes. Returns -1 if no path exists.
-
-        Raises:
-            ValueError: If 'G' is not an undirected graph.
-        """
-        # Check if 'G' is an undirected graph
-        if not isinstance(G, nx.Graph):
-            raise ValueError("'G' must be a graph (networkx.Graph).")
-
-        try:
-            if G.is_directed():
-                G_ = G.to_undirected()
-                distance = nx.shortest_path_length(G_, source=source_id, target=target_id)
-            else:
-                distance = nx.shortest_path_length(G, source=source_id, target=target_id)
-            return distance
-        except nx.NetworkXNoPath:
-            return -1  # No path exists
+            return cohort_instance_map
         
     def _calculate_difference(self, node):
         """
@@ -194,16 +153,30 @@ class determine_best_concepts:
                 differences.append(abs(p_a - p_b))
         
         return np.mean(differences)
-    
-    def _custom_sort_key(self, item):
-        """
-        Custom sorting key for sorting nodes based on difference and depth.
 
-        Parameters:
-            item: The item to be sorted.
+    def _average_precision(self, node):
+        num_groups = len(self.groups)
 
-        Returns:
-            tuple: A tuple containing difference and depth values for sorting.
-        """
-        # Sort by difference then depth, largest difference and depth first
-        return (-item[1]["difference"], -item[1]["depth"])
+        average_precision = []
+        for i in range(num_groups):
+            group_a = self.groups[i]
+            other_groups = [group for group in self.groups if group != group_a]
+            instances_a_node = self.grouped_node_attributes[node][group_a]
+            
+            group_a_size = self.group_size[group_a]
+            cohort_proportion = group_a_size/(group_a_size+sum(self.group_size[group] for group in other_groups))
+
+            true_positives_a = len(instances_a_node)
+
+            if true_positives_a > group_a_size*0.01:
+                false_positives_a = sum(len(self.grouped_node_attributes[node][group]) for group in other_groups)
+                average_precision.append(abs(self.precision(true_positives_a, false_positives_a)-cohort_proportion))
+            else:
+                average_precision.append(0)
+        return np.mean(average_precision)
+
+                
+    def precision(self, true_positives, false_positives):
+        if true_positives + false_positives == 0:
+            return 0
+        return true_positives / (true_positives + false_positives)
