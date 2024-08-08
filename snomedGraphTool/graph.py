@@ -133,7 +133,7 @@ class SNOMEDGraphTool:
         weight (float): The weight to apply to the node depth.
         """
         for node in tqdm(self.G.nodes, total=len(self.G.nodes), desc='Weighting Node Scores'):
-            self.G.nodes[node]['weighted_score'] = self.G.nodes[node]['score'] * (1 + (self.G.nodes[node]['depth'] * weight))
+            self.G.nodes[node]['weighted_score'] = abs(self.G.nodes[node]['score']) * (1 + (self.G.nodes[node]['depth'] * weight))
 
     def get_eligible_nodes(self, scorer, total_patients, rarity_threshold=0.05, min_depth=0.1, weight=None):
         """
