@@ -5,5 +5,5 @@ This code is designed to facilitate the selection of optimal SNOMED concepts for
 ## Useage
 To complete the example, simply add the SNOMED description and relationship files to the data folder, and ammend ensure the file names are correct in the example.ipynb file.
 
-### Contribution
+## Contribution
 This repository is a Python translation of the [Graph Patterns Package](https://github.com/kaicode/graph-patterns/).
