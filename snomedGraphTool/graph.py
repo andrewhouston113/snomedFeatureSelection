@@ -5,21 +5,10 @@ from collections import Counter
 class SNOMEDGraphTool:
     """
     A tool for managing and analyzing a SNOMED CT hierarchy graph.
-    
-    Attributes:
-    G (networkx.DiGraph): The directed graph representing the SNOMED CT hierarchy.
-    relationships (DataFrame): The DataFrame containing relationship data.
-    descriptions (DataFrame): The DataFrame containing description data.
-    X (DataFrame): The DataFrame containing patient data with SNOMED codes.
-    y_dict (dict): A dictionary mapping patient IDs to labels.
-    code_column (str): The name of the column containing SNOMED codes in X.
-    id_column (str): The name of the column containing patient IDs in X.
-    all_codes_used (ndarray): Unique SNOMED codes used in X.
-    concept_dict (dict): A dictionary mapping concept IDs to terms.
     """
     
     def __init__(self, relationships, descriptions, X=None, y_dict=None, 
-                 code_column='snomedCode', id_column='patient_id'):
+                 code_column='snomedCode', id_column='patient_id', depth_method = 'absolute'):
         """
         Initializes the SNOMEDGraphTool with the provided data and builds the graph.
         
@@ -30,12 +19,17 @@ class SNOMEDGraphTool:
         y_dict (dict): A dictionary mapping patient IDs to labels.
         code_column (str, optional): The name of the column containing SNOMED codes in X. Defaults to 'snomedCode'.
         id_column (str, optional): The name of the column containing patient IDs in X. Defaults to 'patient_id'.
+        depth_method (str, optional): The method used to calculate depth. Option include 'absolute' or 'relative'.
         """
+        if depth_method not in  ['absolute', 'relative']:
+            raise ValueError(f"Invalid depth_method: {depth_method}. Must be either 'absolute' or 'relative'.")
+
         self.G = nx.DiGraph()
         self.relationships = relationships
         self.code_column = code_column
         self.id_column = id_column
         self.concept_dict = dict(zip(descriptions['conceptId'], descriptions['term']))
+        self.depth_method = depth_method
 
         self.build_graph()
         if (X is not None) & (y_dict is not None):
@@ -80,8 +74,14 @@ class SNOMEDGraphTool:
         depth = nx.single_source_shortest_path_length(self.G, root)
 
         for node in tqdm(self.G.nodes, total=len(self.G.nodes), desc='Assigning Attributes'):
-            descendants_depth = [depth.get(descendant,0) for descendant in nx.descendants(self.G, node)]
-            self.G.nodes[node]['depth'] = depth.get(node,0)/max(descendants_depth) if len(descendants_depth) > 0 else 1
+            if self.depth_method == 'absolute':
+                descendants_depth = [depth.get(descendant,0) for descendant in nx.descendants(self.G, node)]
+                self.G.nodes[node]['depth'] = depth.get(node,0)/max(descendants_depth) if len(descendants_depth) > 0 else 1
+            elif self.depth_method == 'relative':
+                descendants = len(nx.descendants(self.G, node))
+                ancestors = len(nx.ancestors(self.G, node))
+                self.G.nodes[node]['depth'] =ancestors/(descendants+ancestors)
+
             self.G.nodes[node]['label'] = self.concept_dict[node]
             self.G.nodes[node]['ids'] = set(self.X.query(f'{self.code_column} == {node}')[self.id_column])
 
@@ -133,7 +133,7 @@ class SNOMEDGraphTool:
         weight (float): The weight to apply to the node depth.
         """
         for node in tqdm(self.G.nodes, total=len(self.G.nodes), desc='Weighting Node Scores'):
-            self.G.nodes[node]['weighted_score'] = self.G.nodes[node]['score'] * (1 + (self.G.nodes[node]['depth'] * weight))
+            self.G.nodes[node]['weighted_score'] = abs(self.G.nodes[node]['score']) * (1 + (self.G.nodes[node]['depth'] * weight))
 
     def get_eligible_nodes(self, scorer, total_patients, rarity_threshold=0.05, min_depth=0.1, weight=None):
         """
