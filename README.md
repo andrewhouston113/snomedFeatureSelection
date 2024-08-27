@@ -52,4 +52,4 @@ for i in eligible_nodes[:10]:
 Currently, the tool only supports parent-child relationships within the hierarchy, several of the scorers are only suitable for two-class problems.
 
 ## Contribution
-This repository is a Python translation of the [Graph Patterns Package](https://github.com/kaicode/graph-patterns/).
+This repository is a modified version of the [Graph Patterns Package](https://github.com/kaicode/graph-patterns/).
